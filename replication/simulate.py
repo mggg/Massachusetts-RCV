@@ -10,27 +10,35 @@ from votekit import (
 )
 from votekit.elections import STV, fractional_transfer
 
+# helper functions
+def count_winners(results: list, majority: str, seats: int) -> int:
+    '''
+    Helper function to count winners from election ranking vector.
+    Returns the number of winners from the majority.
+    '''
+    num_winners = 0
+    for cand in results[:seats]:
+        if cand[0] == majority:
+            num_winners += 1
 
-## STV (5 seat), IRV (1 seat)
-## Even R/D split, based on population
-## Dirichlet alpha=1
+    return num_winners
+
+
+## Simulation code
 # CS both ways: (W=R / C=D) and (W=D / C=R)
-# 10 plans - 100 simulations
-ELECTION = "SEN18"
-NUM_SIMS = 100
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--seats", type=int, required=True)
 parser.add_argument("--num_districts", type=int, required=True)
-parser.add_argument("--even_split", action="store_true")
+parser.add_argument("--num_seats", type=int, required=True)
+parser.add_argument("--cand_split", type=str, required=True)
+parser.add_argument("--n_elections", type=int, required=True)
 args = parser.parse_args()
 
-# _R = (W=R / C=D), _D = (W=D / C=R)
+
 models = {
     "placket-luce": name_PlackettLuce,
     "bradley-terry": name_BradleyTerry,
-    "cambridge_R": CambridgeSampler,
-    "cambridge_D": CambridgeSampler,
+    "cambridge": CambridgeSampler,
     "alternating-crossover": AlternatingCrossover,
 }
 
@@ -54,72 +62,71 @@ rcands = [f"R{i}" for i in range(1, 15)]
 dcands = [f"D{i}" for i in range(1, 15)]
 
 total_cands = 14
+election = "SEN18"
 
-os.makedirs("./output", exist_ok=True)
-with jsonlines.open(
-    f"./output/{elect_type}-{args.num_districts}-{args.seats}-results.jsonl", "w"
-) as w:
-    for plan in sample_ensemble:
-        plan_data = []
-        district_shares = plan[ELECTION]
-        for demshare in district_shares:
-            zone_data = {}
-            bloc_proportions = {"R": 1-demshare, "D": demshare}
-            demcands = round(demshare * total_cands)
-            zone_data["demshare"] = demshare
-            if args.even_split:
-                zone_data["demcands"] = 7
-                zone_data["rcands"] = 7
-                slate_to_candidates = {"R": rcands[:7], "D": dcands[:7]}
-            else:
-                zone_data["demcands"] = demcands
-                zone_data["rcands"] = total_cands - demcands
-                slate_to_candidates = {
-                    "R": rcands[: total_cands - demcands],
-                    "D": dcands[:demcands],
-                }
+os.makedirs("./mass_output/results", exist_ok=True)
 
-            for i in range(NUM_SIMS):
-                for modelname, model in models.items():
-                    print("Starting process for:", modelname)
-                    params = {}
+for plan_idx, plan in enumerate(sample_ensemble):
+    plan_data = []
+    district_shares = plan[election]
+    for demshare in district_shares:
 
-                    # if modelname == "cambridge_R":
-                    #     params["historical_majority"] = "R"
-                    #     params["historical_minority"] = "D"
-                    # elif modelname == "cambridge_D":
-                    #     params["historical_majority"] = "D"
-                    #     params["historical_minority"] = "R"
+        zone_data = {}
+        bloc_proportions = {"R": 1-demshare, "D": demshare}
+        demcands = round(demshare * total_cands)
+        zone_data["demshare"] = demshare
+        zone_data["seats"] = args.num_seats
+        zone_data['raw_outputs'] = []
 
-                    generator = model.from_params(
-                        slate_to_candidates=slate_to_candidates,
-                        bloc_voter_prop=bloc_proportions,
-                        cohesion_parameters=cohesion_parameters,
-                        alphas=dirichlet_alphas,
-                        **params
-                    )
-                    if modelname == 'bradley-terry':
-                        ballots = generator.generate_profile_MCMC(number_of_ballots=1000)
-                    else:
-                        ballots = generator.generate_profile(number_of_ballots=1000)
+        if args.cand_split == 'EVEN':
+            zone_data["demcands"] = 7
+            zone_data["rcands"] = 7
+            slate_to_candidates = {"R": rcands[:7], "D": dcands[:7]}
+        else:
+            zone_data["demcands"] = demcands
+            zone_data["rcands"] = total_cands - demcands
+            slate_to_candidates = {
+                "R": rcands[: total_cands - demcands],
+                "D": dcands[:demcands],
+            }
 
-                    print("Made ballots for", modelname)
-                    results = STV(
-                        ballots,
-                        transfer=fractional_transfer,
-                        seats=args.seats,
-                        quota="droop",  # Added from chris' code
-                        ballot_ties=False,
-                        tiebreak="random",  # Added from chris' code
-                    ).run_election()
+        for i in range(args.n_elections):
+            for modelname, model in models.items():
+                generator = model.from_params(
+                    slate_to_candidates=slate_to_candidates,
+                    bloc_voter_prop=bloc_proportions,
+                    cohesion_parameters=cohesion_parameters,
+                    alphas=dirichlet_alphas,
+                )
 
-                    # maybe condense
-                    winners = results.to_dict(keep=['ranking'])
-                    print("Ran Election")
+                if modelname == 'bradley-terry':
+                    ballots = generator.generate_profile_MCMC(number_of_ballots=1000)
+                else:
+                    ballots = generator.generate_profile(number_of_ballots=1000)
 
-                    if modelname not in zone_data:
-                        zone_data[modelname] = []
-                    zone_data[modelname].append(winners)
+                results = STV(
+                    ballots,
+                    transfer=fractional_transfer,
+                    seats=args.num_seats,
+                    quota="droop",  
+                    ballot_ties=False,
+                    tiebreak="random",  
+                ).run_election()
 
-            plan_data.append(zone_data)
-        w.write(plan_data)
+                winners = results.to_dict(keep=['ranking'])
+
+                # save D winners
+                if modelname not in zone_data:
+                    zone_data[modelname] = []
+                zone_data[modelname].append(count_winners(winners['ranking'], "D", args.num_seats))
+
+                # save ranking vector from elections
+                zone_data["raw_outputs"].append({modelname : winners['ranking']})
+
+
+        plan_data.append(zone_data)
+
+    with jsonlines.open(f"./mass_output/results/{elect_type}-{args.num_districts}-{args.num_seats}-results-plan-{plan_idx}.jsonl", "w") as w:
+        w.write_all(plan_data)
+
+
