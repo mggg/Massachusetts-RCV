@@ -41,6 +41,8 @@ summary = statewide.merge(poc, on="STATE")\
 
 state = summary[location.name.title()]
 
+
+# TODO 
 REDUCEDTURNOUT = True
 turnoutsuffix = ""
 if REDUCEDTURNOUT: turnoutsuffix = "_low_turnout"
@@ -230,7 +232,7 @@ width, height = bbox.width, bbox.height
 
 save_state = str(location.name)
 
-figpath = f"plots_no_AC/{save_state.lower()}"
+figpath = f"test/plots_no_AC/{save_state.lower()}"
 plot_name = re.sub(r'\b\d+-\d+-\d+\b', rename(mag_list), model_type)
 
 os.makedirs(figpath, exist_ok=True)
